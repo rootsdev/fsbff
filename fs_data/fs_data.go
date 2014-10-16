@@ -63,6 +63,7 @@ type FSFact struct {
 	Type             *string `protobuf:"bytes,1,opt,name=type" json:"type,omitempty"`
 	Year             *int32  `protobuf:"varint,2,opt,name=year" json:"year,omitempty"`
 	Place            *string `protobuf:"bytes,3,opt,name=place" json:"place,omitempty"`
+	Value            *string `protobuf:"bytes,4,opt,name=value" json:"value,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -87,6 +88,13 @@ func (m *FSFact) GetYear() int32 {
 func (m *FSFact) GetPlace() string {
 	if m != nil && m.Place != nil {
 		return *m.Place
+	}
+	return ""
+}
+
+func (m *FSFact) GetValue() string {
+	if m != nil && m.Value != nil {
+		return *m.Value
 	}
 	return ""
 }

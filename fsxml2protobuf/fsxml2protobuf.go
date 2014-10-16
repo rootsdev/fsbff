@@ -212,6 +212,9 @@ func getFact(fact Fact) *fs_data.FSFact {
 	if place != "" {
 		fsFact.Place = &place
 	}
+	if fact.Value != "" {
+		fsFact.Value = &fact.Value
+	}
 
 	return fsFact
 }
