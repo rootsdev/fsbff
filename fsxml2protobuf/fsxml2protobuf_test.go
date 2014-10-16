@@ -55,3 +55,21 @@ func TestGetGender(t *testing.T) {
 		}
 	}
 }
+
+func TestGetFactType(t *testing.T) {
+	var tests = []struct {
+		in string
+		out string
+	}{
+		{"http://gedcomx.org/Birth", "Birth"},
+		{"data:,Other", "OTHER"},
+		{"data:,will", "Will"},
+		{"data:,RESIDENCE", "Residence"},
+	}
+	for _, test := range tests {
+		actual := getFactType(test.in)
+		if actual != test.out {
+			t.Errorf("getEventType(%q) = %v; want %v", test.in, actual, test.out)
+		}
+	}
+}

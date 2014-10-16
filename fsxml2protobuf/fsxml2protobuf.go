@@ -76,6 +76,7 @@ type Fact struct {
 	Attribution Attribution `xml:"attribution"`
 	Date        Date        `xml:"date"`
 	Place       Place       `xml:"place"`
+	Value       string      `xml:"value"`
 }
 
 // Date we only capture the user-entered text
@@ -139,8 +140,36 @@ func getSources(person *Person) (sources []*fs_data.FSSource) {
 	return
 }
 
-func getGedcomXLabel(url string) string {
-	return url[strings.LastIndex(url, "/")+1:]
+var customTypeMap = map[string]string{
+	"census":           "Residence",
+	"residence":        "Residence",
+	"will":             "Will",
+	"baptism":          "Baptism",
+	"confirmation":     "Confirmation",
+	"christened":       "Christening",
+	"probate":          "Probate",
+	"marriage":         "Marriage",
+	"marr":             "Marriage",
+	"marriage-license": "MarriageLicense",
+	"military service": "MilitaryService",
+	"military":         "MilitaryService",
+	"_milt":            "MilitaryService",
+	"emigration":       "Emigration",
+	"immigration":      "Immigration",
+	"arrival":          "MoveTo",
+	"move":             "MoveTo",
+}
+
+func getFactType(typ string) string {
+	if strings.HasPrefix(typ, "http://gedcomx.org/") {
+		typ = typ[strings.LastIndex(typ, "/")+1:]
+	} else {
+		typ = customTypeMap[strings.ToLower(typ[6:])] // skip data:,
+		if typ == "" {
+			typ = "OTHER"
+		}
+	}
+	return typ
 }
 
 var yearRegex = regexp.MustCompile("\\D*(\\d{4})\\D*")
@@ -164,23 +193,26 @@ func getStdPlace(place string) string {
 }
 
 func getFact(fact Fact) *fs_data.FSFact {
-	// Extract only gedcomx types
-	if !strings.Contains(fact.Type, "gedcomx.org") {
+	t := getFactType(fact.Type)
+	year := getYear(fact.Date.Original)
+	place := getStdPlace(fact.Place.Original)
+
+	// omit OTHER facts that don't have a year or place
+	if t == "OTHER" && year == 0 && place == "" {
 		return nil
 	}
-	
-	t := getGedcomXLabel(fact.Type)
+
+	// construct fact
 	fsFact := &fs_data.FSFact{
 		Type: &t,
 	}
-	year := getYear(fact.Date.Original)
 	if year != 0 {
 		fsFact.Year = &year
 	}
-	place := getStdPlace(fact.Place.Original)
 	if place != "" {
 		fsFact.Place = &place
 	}
+
 	return fsFact
 }
 
@@ -188,14 +220,14 @@ func getFacts(person *Person, relationships []Relationship) (fsFacts []*fs_data.
 	for _, fact := range person.Facts {
 		fsFact := getFact(fact)
 		if fsFact != nil {
-			fsFacts = append(fsFacts, fsFact)			
+			fsFacts = append(fsFacts, fsFact)
 		}
 	}
 	for _, relationship := range relationships {
 		for _, fact := range relationship.Facts {
 			fsFact := getFact(fact)
 			if fsFact != nil {
-				fsFacts = append(fsFacts, fsFact)				
+				fsFacts = append(fsFacts, fsFact)
 			}
 		}
 	}
