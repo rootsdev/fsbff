@@ -97,8 +97,7 @@ func processFile(filename string) {
 	err = proto.Unmarshal(protoBytes, fsPersons)
 	check(err)
 
-	temp := make([]*fs_data.FamilySearchPerson, 0)
-	addDescendants(temp)
+	addDescendants(fsPersons.GetPersons())
 }
 
 func processFiles(fileNames chan string, results chan int) {
