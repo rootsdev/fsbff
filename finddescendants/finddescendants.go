@@ -2,19 +2,16 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"code.google.com/p/goprotobuf/proto"
 	"compress/gzip"
 	"flag"
 	"fmt"
 	"github.com/rootsdev/fsbff/fs_data"
-	"io"
 	"io/ioutil"
 	"log"
 	"math"
 	"os"
 	"runtime"
-	"strings"
 )
 
 /*
@@ -44,22 +41,24 @@ To do: Automate re-running the program. Step 5 should be simply, reset the FS pe
 re-run steps 2-5 with the current set of descendants. Repeat until no new descendants are found.
 */
 
-var descendants map[string][]string
-
-func addDescendants(persons []*fs_data.FamilySearchPerson) {
-	for i, person := range persons {
-		fmt.Printf("fsPersons[%d]=%+v\n\n", i, person)
+func addDescendants(descendants map[string]bool, persons map[string]*fs_data.FamilySearchPerson) {
+	for _, person := range persons {
+		if descendants[person.GetId()] {
+			for _, child := range person.GetChildren() {
+				descendants[child] = true
+			}
+		}
 	}
 }
 
-func readSourceRefs(file *os.File) map[string][]string {
-	sourceRefs := make(map[string][]string)
+func readDescendants(file *os.File) map[string]bool {
+	descendants := make(map[string]bool)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		sourceRefs[line] = make([]string, 0)
+		descendants[line] = true
 	}
-	return sourceRefs
+	return descendants
 }
 
 func check(err error) {
@@ -68,24 +67,18 @@ func check(err error) {
 	}
 }
 
-func processFile(filename string, gzipOutput bool) (recordCount int) {
-	inOut := strings.SplitN(filename, "\t", 2)
-	inFilename := inOut[0]
-	outFilename := inOut[1]
-	var file io.ReadCloser
-	var err error
-
-	file, err = os.Open(inFilename)
+func processFile(filename string, descendants map[string]bool) (recordCount int) {
+	file, err := os.Open(filename)
 	if err != nil {
-		log.Printf("Error opening %s %v", inFilename, err)
+		log.Printf("Error opening %s %v", filename, err)
 		return 0
 	}
 	defer file.Close()
 
-	if inFilename[len(inFilename)-3:] == ".gz" {
-		file, err = gzip.NewReader(file)
+	if filename[len(filename)-3:] == ".gz" {
+		file, err := gzip.NewReader(file)
 		if err != nil {
-			log.Printf("Error unzipping %s %v", inFilename, err)
+			log.Printf("Error unzipping %s %v", filename, err)
 			return 0
 		}
 		defer file.Close()
@@ -98,37 +91,25 @@ func processFile(filename string, gzipOutput bool) (recordCount int) {
 	err = proto.Unmarshal(protoBytes, fsPersons)
 	check(err)
 	
-	addDescendants(fsPersons.GetPersons())
-
-	b := make([]byte, 0)
-	if gzipOutput {
-		var buf bytes.Buffer
-		w := gzip.NewWriter(&buf)
-		w.Write(b)
-		w.Close()
-		b = buf.Bytes()
+	persons := make(map[string]*fs_data.FamilySearchPerson)
+	for _, person := range fsPersons.GetPersons() {
+		persons[person.GetId()] = person
 	}
-
-	err = ioutil.WriteFile(outFilename, b, 0644)
-	if err != nil {
-		log.Printf("Error writing %s %v", outFilename, err)
-		return 0
-	}
-
-	return
+	
+	addDescendants(descendants, persons)
+	return len(persons)
 }
 
-func processFiles(fileNames chan string, results chan int, gzipOutput bool) {
+func processFiles(fileNames chan string, descendants map[string]bool, results chan int) {
 	for fileName := range fileNames {
-		results <- processFile(fileName, gzipOutput)
+		results <- processFile(fileName, descendants)
 	}
 }
 
-var descendantsFilename = flag.String("d", "", "descendants filename or directory")
+var descendantsFilename = flag.String("d", "", "descendants filename")
 var personsFilename = flag.String("p", "", "FS Persons proto filename or directory")
 var outFilename = flag.String("o", "", "output filename or directory")
 var numWorkers = flag.Int("w", 1, "number of workers")
-var gzipOutput = flag.Bool("z", false, "gzip output")
 
 func main() {
 	flag.Parse()
@@ -145,21 +126,11 @@ func main() {
 		fileInfos, err := ioutil.ReadDir(*personsFilename)
 		check(err)
 		for _, fileInfo := range fileInfos {
-			start := 0
-			if strings.HasPrefix(fileInfo.Name(), "gedcomxb.") {
-				start = len("gedcomxb.")
-			}
-			end := strings.Index(fileInfo.Name(), ".xml")
-			suffix := ""
-			if *gzipOutput {
-				suffix = ".gz"
-			}
-			fileNames <- *personsFilename + "/" + fileInfo.Name() + "\t" +
-				*outFilename + "/" + fileInfo.Name()[start:end] + ".protobuf" + suffix
+			fileNames <- *personsFilename + "/" + fileInfo.Name()
 			numFiles++
 		}
 	} else {
-		fileNames <- *personsFilename + "\t" + *outFilename
+		fileNames <- *personsFilename
 		numFiles++
 	}
 	close(fileNames)
@@ -168,13 +139,13 @@ func main() {
 	descendantsFile, err := os.Open(*descendantsFilename)
 	check(err)
 	defer descendantsFile.Close()
-	descendants = readSourceRefs(descendantsFile)
+	descendants := readDescendants(descendantsFile)
 
 	fmt.Print("Processing files")
 	results := make(chan int)
 
 	for i := 0; i < *numWorkers; i++ {
-		go processFiles(fileNames, results, *gzipOutput)
+		go processFiles(fileNames, descendants, results)
 	}
 
 	recordsProcessed := 0
@@ -186,5 +157,17 @@ func main() {
 			fmt.Print(".")
 		}
 	}
+
+	out, err := os.Create(*outFilename)
+	check(err)
+	defer out.Close()
+	buf := bufio.NewWriter(out)
+
+	for d := range descendants {
+		buf.WriteString(fmt.Sprintf("%s\n", d))
+	}
+	buf.Flush()
+	out.Sync()
+
 	fmt.Printf("\nTotal files=%d records=%d\n", filesProcessed, recordsProcessed)
 }
