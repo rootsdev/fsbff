@@ -18,6 +18,7 @@ func check(err error) {
 
 func main() {
 	var numRecords = flag.Int("n", 10, "number of records to dump")
+	var field = flag.String("f", "", "field to dump: [a]ll, [i]d")
 	flag.Parse()
 	
 	file, err := os.Open(flag.Arg(0))
@@ -32,6 +33,11 @@ func main() {
 	check(err)
 
 	for i := 0; i < *numRecords; i++ {
-		fmt.Printf("fsPersons[%d]=%+v\n\n", i, fsPersons.Persons[i])
+		switch *field {
+		case "i":
+			fmt.Printf("%s\n", fsPersons.Persons[i].GetId())
+		default:
+			fmt.Printf("fsPersons[%d]=%+v\n\n", i, fsPersons.Persons[i])
+		}
 	}
 }
