@@ -33,7 +33,7 @@ large that the person map will not all fit into memory.
 
 This package instead implements the algorithm as follows:
   1. Read all the descendants into a set
-  2. Read a single proto file of FS people and create a map of person ID and person
+  2. Read a single proto file of FS people
   3. If the person is in the descendants set, add all its children to the set
   4. Repeat steps 2 and 3 until all the proto files have been processed
   5. Iterate steps 2-4 until maxIterations has been reached or no new descendents have been added
