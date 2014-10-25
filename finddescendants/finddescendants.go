@@ -7,11 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"github.com/rootsdev/fsbff/fs_data"
+	"io"
 	"io/ioutil"
 	"log"
 	"math"
 	"os"
 	"runtime"
+	"sync"
+	"strings"
 )
 
 /*
@@ -33,20 +36,27 @@ This package instead implements the algorithm as follows:
   2. Read a single proto file of FS people and create a map of person ID and person
   3. If the person is in the descendants set, add all its children to the set
   4. Repeat steps 2 and 3 until all the proto files have been processed
-  5. Write the descendants to the output file
-The program should now be re-run with the output file from step 5 as the new input file
-to step 1. Repeat until no new descendants are found.
-
-To do: Automate re-running the program. Step 5 should be simply, reset the FS people files and
-re-run steps 2-5 with the current set of descendants. Repeat until no new descendants are found.
+  5. Iterate steps 2-4 until maxIterations has been reached or no new descendents have been added
+  6. Write the descendants to the output file
 */
 
-func addDescendants(descendants map[string]bool, persons map[string]*fs_data.FamilySearchPerson) {
+// global descendants map with a read-write mutex
+var (
+	descendants map[string]bool
+	desdendantsMutex sync.RWMutex
+)
+
+func addDescendants(persons []*fs_data.FamilySearchPerson) {
 	for _, person := range persons {
-		if descendants[person.GetId()] {
+		desdendantsMutex.RLock()
+		found := descendants[person.GetId()]
+		desdendantsMutex.RUnlock()
+		if found {
+			desdendantsMutex.Lock()
 			for _, child := range person.GetChildren() {
 				descendants[child] = true
 			}
+			desdendantsMutex.Unlock()
 		}
 	}
 }
@@ -67,20 +77,16 @@ func check(err error) {
 	}
 }
 
-func processFile(filename string, descendants map[string]bool) (recordCount int) {
-	file, err := os.Open(filename)
-	if err != nil {
-		log.Printf("Error opening %s %v", filename, err)
-		return 0
-	}
+func processFile(filename string) {
+	var file io.ReadCloser
+	var err error
+	file, err = os.Open(filename)
+	check(err)
 	defer file.Close()
 
-	if filename[len(filename)-3:] == ".gz" {
-		file, err := gzip.NewReader(file)
-		if err != nil {
-			log.Printf("Error unzipping %s %v", filename, err)
-			return 0
-		}
+	if strings.HasSuffix(filename, ".gz") {
+		file, err = gzip.NewReader(file)
+		check(err)
 		defer file.Close()
 	}
 
@@ -90,25 +96,22 @@ func processFile(filename string, descendants map[string]bool) (recordCount int)
 	fsPersons := &fs_data.FamilySearchPersons{}
 	err = proto.Unmarshal(protoBytes, fsPersons)
 	check(err)
-	
-	persons := make(map[string]*fs_data.FamilySearchPerson)
-	for _, person := range fsPersons.GetPersons() {
-		persons[person.GetId()] = person
-	}
-	
-	addDescendants(descendants, persons)
-	return len(persons)
+
+	temp := make([]*fs_data.FamilySearchPerson, 0)
+	addDescendants(temp)
 }
 
-func processFiles(fileNames chan string, descendants map[string]bool, results chan int) {
+func processFiles(fileNames chan string, results chan int) {
 	for fileName := range fileNames {
-		results <- processFile(fileName, descendants)
+		processFile(fileName)
+		results <- 0 // dummy value to signify file processing is complete
 	}
 }
 
 var descendantsFilename = flag.String("d", "", "descendants filename")
 var personsFilename = flag.String("p", "", "FS Persons proto filename or directory")
 var outFilename = flag.String("o", "", "output filename or directory")
+var maxIterations = flag.Int("m", 20, "maximum number of iterations")
 var numWorkers = flag.Int("w", 1, "number of workers")
 
 func main() {
@@ -118,43 +121,55 @@ func main() {
 	fmt.Printf("Number of CPUs=%d\n", numCPU)
 	runtime.GOMAXPROCS(int(math.Min(float64(numCPU), float64(*numWorkers))))
 
-	numFiles := 0
-	fileNames := make(chan string, 100000)
+	fileNames := make([]string, 0, 100000)
+
 	fileInfo, err := os.Stat(*personsFilename)
 	check(err)
 	if fileInfo.IsDir() {
 		fileInfos, err := ioutil.ReadDir(*personsFilename)
 		check(err)
 		for _, fileInfo := range fileInfos {
-			fileNames <- *personsFilename + "/" + fileInfo.Name()
-			numFiles++
+			fileNames = append(fileNames, *personsFilename + "/" + fileInfo.Name())
 		}
 	} else {
-		fileNames <- *personsFilename
-		numFiles++
+		fileNames = append(fileNames, *personsFilename)
 	}
-	close(fileNames)
 
 	fmt.Println("Reading descendants")
 	descendantsFile, err := os.Open(*descendantsFilename)
 	check(err)
 	defer descendantsFile.Close()
-	descendants := readDescendants(descendantsFile)
+	descendants = readDescendants(descendantsFile)
 
-	fmt.Print("Processing files")
 	results := make(chan int)
-
-	for i := 0; i < *numWorkers; i++ {
-		go processFiles(fileNames, descendants, results)
+	fileNamesCh := make(chan string, 100000)
+	var i int
+	for i = 0; i < *numWorkers; i++ {
+		go processFiles(fileNamesCh, results)
 	}
 
-	recordsProcessed := 0
-	filesProcessed := 0
-	for i := 0; i < numFiles; i++ {
-		recordsProcessed += <-results
-		filesProcessed++
-		if filesProcessed%100 == 0 {
-			fmt.Print(".")
+	for iter := 0; iter < *maxIterations; iter++ {
+		descendantsCount := len(descendants)
+		fmt.Printf("Processing iteration %d #descendants=%d", iter, descendantsCount)
+
+		// fill up the input channel
+		for i = 0; i < len(fileNames); i++ {
+			fileNamesCh <- fileNames[i]
+		}
+
+		// drain the output channel
+		for i = 0; i < len(fileNames); i++ {
+			<-results
+			if i%1000 == 0 {
+				fmt.Print(".")
+			}
+		}
+		fmt.Println()
+
+		// check if we should end early
+		if descendantsCount == len(descendants) {
+			fmt.Println("No more descendants found")
+			break
 		}
 	}
 
@@ -168,6 +183,4 @@ func main() {
 	}
 	buf.Flush()
 	out.Sync()
-
-	fmt.Printf("\nTotal files=%d records=%d\n", filesProcessed, recordsProcessed)
 }
