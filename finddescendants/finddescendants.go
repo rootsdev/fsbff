@@ -41,8 +41,9 @@ This package instead implements the algorithm as follows:
 */
 
 // global descendants map with a read-write mutex
+type descendantsType map[string]bool
 var (
-	descendants map[string]bool
+	descendants descendantsType
 	desdendantsMutex sync.RWMutex
 )
 
@@ -61,8 +62,8 @@ func addDescendants(persons []*fs_data.FamilySearchPerson) {
 	}
 }
 
-func readDescendants(file *os.File) map[string]bool {
-	descendants := make(map[string]bool)
+func readDescendants(file *os.File) descendantsType {
+	descendants := make(descendantsType)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
