@@ -143,8 +143,7 @@ func main() {
 
 	results := make(chan int)
 	fileNamesCh := make(chan string, 100000)
-	var i int
-	for i = 0; i < *numWorkers; i++ {
+	for i := 0; i < *numWorkers; i++ {
 		go processFiles(fileNamesCh, results)
 	}
 
@@ -153,12 +152,12 @@ func main() {
 		fmt.Printf("Processing iteration %d #descendants=%d", iter, descendantsCount)
 
 		// fill up the input channel
-		for i = 0; i < len(fileNames); i++ {
+		for i := 0; i < len(fileNames); i++ {
 			fileNamesCh <- fileNames[i]
 		}
 
 		// drain the output channel
-		for i = 0; i < len(fileNames); i++ {
+		for i := 0; i < len(fileNames); i++ {
 			<-results
 			if i%1000 == 0 {
 				fmt.Print(".")
