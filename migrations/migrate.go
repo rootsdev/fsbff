@@ -42,25 +42,24 @@ func (l Locations) Swap(i, j int) {
 
 // Maps "from" Location to multiple "to" Locations with count each one occurred
 type Migrations map[Location]map[Location]int
-func (m Migrations) add(from, to Location) {
+func (m Migrations) add(from, to Location, count int) {
 	f := m[from]
 	if f == nil {
 		f = make(map[Location]int)
 		m[from] = f
 	}
-	f[to] = f[to] + 1
+	f[to] = f[to] + count
 }
-
-var migrations Migrations
 
 func NewLocation(fact *fs_data.FSFact) Location {
 	decade := *fact.Year - *fact.Year % 10
 	return Location{*fact.Place, decade}
 }
 
-func processFile(filename string) int {
+func processFile(filename string) Migrations {
 	fsPersons := readPersons(filename)
 	
+	migrations := make(Migrations)
 	for _, person := range fsPersons.Persons {
 		locations := NewLocations()
 		for _, fact := range person.Facts {
@@ -80,14 +79,14 @@ func processFile(filename string) int {
 		for _, location := range locations {
 			if prev.place != "" {
 				if location.place != prev.place {
-					migrations.add(prev, location)
+					migrations.add(prev, location, 1)
 					fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
 				}
 			}
 			prev = location
 		}
 	}
-	return len(fsPersons.Persons)
+	return migrations
 }
 
 func check(err error) {
@@ -120,12 +119,12 @@ func readPersons(filename string) *fs_data.FamilySearchPersons {
 	return fsPersons
 }
 
-func processFiles(fileNames chan string, results chan int) {
+func processFiles(fileNames chan string, results chan Migrations) {
 	for fileName := range fileNames {
 		fmt.Printf("Processing file: %s", fileName)
-		n := processFile(fileName)
-		fmt.Printf("; processed %d people", n)
-		results <- n
+		m := processFile(fileName)
+		fmt.Printf("; found %d migration starts", len(m))
+		results <- m
 	}
 }
 
@@ -164,19 +163,23 @@ func main() {
 	numFiles, fileNames := getFilenames(*inFilename)
 
 	fmt.Println("Processing files")
-	results := make(chan int)
+	results := make(chan Migrations)
 
-	migrations = make(Migrations)
 	for i := 0; i < *numWorkers; i++ {
 		go processFiles(fileNames, results)
 	}
 
-	// Make sure all files have been processed by draining the channel
-	total := 0
+	// Merge all the resulting migration maps
+	migrations := make(Migrations)
 	for i := 0; i < numFiles; i++ {
-		total = total + <-results
+		m := <-results
+		for from, toMap := range m {
+			for to, count := range toMap {
+				migrations.add(from, to, count)
+			}
+		}
 	}
-	fmt.Println("\n\nTotal:", total)
+	fmt.Println("\n\nTotal:", len(migrations))
 	
 	out, err := os.Create(*outFilename)
 	check(err)
