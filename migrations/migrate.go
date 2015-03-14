@@ -77,16 +77,60 @@ func processFile(filename string) Migrations {
 		fmt.Println("Person", person)
 		prev := Location{}
 		for _, location := range locations {
-			if prev.place != "" {
-				if location.place != prev.place {
-					migrations.add(prev, location, 1)
-					fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
-				}
+			if migrated(prev.place, location.place) {
+				migrations.add(prev, location, 1)
+				fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
 			}
 			prev = location
 		}
 	}
 	return migrations
+}
+
+// Determines if the 'from' and 'to' strings represent a migration, that
+// is, if the locales are sufficiently different.
+// Compare the last 3 locales if U.S., last 2 otherwise.
+func migrated(from, to string) bool {
+	if from == to {
+		return false
+	}
+	fromPlaces := strings.Split(from, ",")
+	toPlaces := strings.Split(to, ",")
+	if len(fromPlaces) <= 1 || len(toPlaces) <= 1 {
+		return false
+	}
+	// check country
+	if !compare(fromPlaces[len(fromPlaces)-1], toPlaces[len(toPlaces)-1]) {
+		return true
+	}
+	if len(fromPlaces) < 2 || len(toPlaces) < 2 {
+		return false
+	}
+	// check state
+	if !compare(fromPlaces[len(fromPlaces)-2], toPlaces[len(toPlaces)-2]) {
+		return true
+	}
+	// If US also check county
+	if compare(fromPlaces[len(fromPlaces) - 1], "United States") {
+		if len(fromPlaces) < 3 || len(toPlaces) < 3 {
+			return false
+		}
+		if !compare(fromPlaces[len(fromPlaces)-3], toPlaces[len(toPlaces)-3]) {
+			return true
+		}
+	}
+	return false
+}
+
+// Simple string compare that trims spaces and ignores case.
+// As an oddity to make the above logic simpler, empty strings always compare true.
+func compare(a, b string) bool {
+	a1 := strings.ToLower(strings.TrimSpace(a))
+	b1 := strings.ToLower(strings.TrimSpace(b))
+	if a1 == "" || b1 == "" {
+		return true
+	}
+	return a1 == b1
 }
 
 func check(err error) {
