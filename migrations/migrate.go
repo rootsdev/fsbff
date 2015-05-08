@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-const YEAR_GRANULARITY = 20
+const YEAR_GRANULARITY = 10
 
 type Location struct {
 	place string
