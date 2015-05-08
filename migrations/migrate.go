@@ -17,9 +17,11 @@ import (
 	"strings"
 )
 
+const YEAR_GRANULARITY = 20
+
 type Location struct {
 	place string
-	decade int32
+	year int32
 }
 
 type Locations []Location
@@ -31,10 +33,10 @@ func (l Locations) Len() int {
     return len(l)
 }
 func (l Locations) Less(i, j int) bool {
-    if l[i].decade == l[j].decade {
+    if l[i].year == l[j].year {
     	return l[i].place < l[j].place
     }
-	return l[i].decade < l[j].decade
+	return l[i].year < l[j].year
 }
 func (l Locations) Swap(i, j int) {
     l[i], l[j] = l[j], l[i]
@@ -43,17 +45,46 @@ func (l Locations) Swap(i, j int) {
 // Maps "from" Location to multiple "to" Locations with count each one occurred
 type Migrations map[Location]map[Location]int
 func (m Migrations) add(from, to Location, count int) {
-	f := m[from]
+    stdFrom := Location{
+        place: stdPlace(from.place),
+        year: from.year - from.year % YEAR_GRANULARITY,
+    }
+    stdTo := Location{
+        place: stdPlace(to.place),
+        year: to.year - to.year % YEAR_GRANULARITY,
+    }
+	f := m[stdFrom]
 	if f == nil {
 		f = make(map[Location]int)
-		m[from] = f
+		m[stdFrom] = f
 	}
-	f[to] = f[to] + count
+	f[stdTo] = f[stdTo] + count
+}
+
+func stdPlace(place string) string {
+    places := strings.Split(place, ",")
+    if len(places) <= 1 {
+        return place
+    }
+    var levels int
+    if strings.TrimSpace(places[len(places) - 1]) == "United States" {
+        levels = 3
+    } else {
+        levels = 2
+    }
+    if levels > len(places) {
+        levels = len(places)
+    }
+    var results []string
+    for i := len(places) - levels; i < len(places); i++ {
+        results = append(results, strings.TrimSpace(places[i]))
+    }
+    return strings.Join(results, ", ")
 }
 
 func NewLocation(fact *fs_data.FSFact) Location {
-	decade := *fact.Year - *fact.Year % 10
-	return Location{*fact.Place, decade}
+	year := *fact.Year
+	return Location{*fact.Place, year}
 }
 
 func processFile(filename string) Migrations {
@@ -74,12 +105,12 @@ func processFile(filename string) Migrations {
 		// If place changes from one location to the next, we have
 		// a migration. Record the most recent location as "from"
 		// and new location as "to".
-		fmt.Println("Person", person)
+		//fmt.Println("Person", person)
 		prev := Location{}
 		for _, location := range locations {
 			if migrated(prev.place, location.place) {
 				migrations.add(prev, location, 1)
-				fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
+				//fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
 			}
 			prev = location
 		}
