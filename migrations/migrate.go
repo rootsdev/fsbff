@@ -42,30 +42,62 @@ func (l Locations) Swap(i, j int) {
     l[i], l[j] = l[j], l[i]
 }
 
-// Maps "from" Location to multiple "to" Locations with count each one occurred
-type Migrations map[Location]map[Location]int
-func (m Migrations) add(from, to Location, count int) {
-    stdFrom := Location{
-        place: stdPlace(from.place),
-        year: from.year - from.year % YEAR_GRANULARITY,
-    }
-    stdTo := Location{
-        place: stdPlace(to.place),
-        year: to.year - to.year % YEAR_GRANULARITY,
-    }
-	f := m[stdFrom]
-	if f == nil {
-		f = make(map[Location]int)
-		m[stdFrom] = f
-	}
-	f[stdTo] = f[stdTo] + count
+type MigrationMap map[Location]map[Location]int
+
+func (mmap MigrationMap) add(key, value Location, count int) {
+    locations := mmap[key]
+   	if locations == nil {
+   		locations = make(map[Location]int)
+   		mmap[key] = locations
+   	}
+    locations[value] = locations[value] + count
 }
 
-func stdPlace(place string) string {
-    places := strings.Split(place, ",")
-    if len(places) <= 1 {
-        return place
+// Maps "from" locations to "to" locations and vice-versa
+type Migrations struct {
+    immigrations MigrationMap  // map "to" Location to multiple "from" Locations with count each one occurred
+    emigrations MigrationMap // map "from" Location to multiple "to" Locations with count each one occurred
+}
+
+func (m Migrations) add(from, to Location) {
+    // standardize places into the correct levels
+    stdFromLevels := stdPlace(from.place)
+    stdToLevels := stdPlace(to.place)
+    stdFromYear := from.year - from.year % YEAR_GRANULARITY
+    stdToYear := to.year - to.year % YEAR_GRANULARITY
+
+    // for each combination of levels: (from county, from state, from county) X (to county, to state, to country)
+    for fromLevel := 0; fromLevel < len(stdFromLevels); fromLevel++ {
+        for toLevel := 0; toLevel < len(stdToLevels); toLevel++ {
+            // calculate the from and to locations for this level combination
+            stdFrom := Location{
+                place: strings.Join(stdFromLevels[fromLevel:], ", "),
+                year: stdFromYear,
+            }
+            stdTo := Location{
+                place: strings.Join(stdToLevels[toLevel:], ", "),
+                year: stdToYear,
+            }
+
+            // ignore P <=> P, Y,Z <=> Z, and Y,Z <=> X,Y,Z
+            if stdFrom.place != stdTo.place &&
+                !(len(stdFromLevels) - fromLevel > len(stdToLevels) - toLevel && strings.HasSuffix(stdFrom.place, stdTo.place)) &&
+                !(len(stdFromLevels) - fromLevel < len(stdToLevels) - toLevel && strings.HasSuffix(stdTo.place, stdFrom.place)) {
+                // add 1 to emigrations
+                m.emigrations.add(stdFrom, stdTo, 1)
+
+                // add 1 to immigrations
+                m.immigrations.add(stdTo, stdFrom, 1)
+            }
+        }
     }
+}
+
+func stdPlace(place string) []string {
+    if place == "" {
+        return []string{}
+    }
+    places := strings.Split(place, ",")
     var levels int
     if strings.TrimSpace(places[len(places) - 1]) == "United States" {
         levels = 3
@@ -75,11 +107,11 @@ func stdPlace(place string) string {
     if levels > len(places) {
         levels = len(places)
     }
-    var results []string
+    results := make([]string, 0, levels)
     for i := len(places) - levels; i < len(places); i++ {
         results = append(results, strings.TrimSpace(places[i]))
     }
-    return strings.Join(results, ", ")
+    return results
 }
 
 func NewLocation(fact *fs_data.FSFact) Location {
@@ -90,7 +122,11 @@ func NewLocation(fact *fs_data.FSFact) Location {
 func processFile(filename string) Migrations {
 	fsPersons := readPersons(filename)
 	
-	migrations := make(Migrations)
+	migrations := Migrations {
+        immigrations: make(MigrationMap),
+        emigrations: make(MigrationMap),
+    }
+
 	for _, person := range fsPersons.Persons {
 		locations := NewLocations()
 		for _, fact := range person.Facts {
@@ -108,8 +144,10 @@ func processFile(filename string) Migrations {
 		//fmt.Println("Person", person)
 		prev := Location{}
 		for _, location := range locations {
-			if migrated(prev.place, location.place) {
-				migrations.add(prev, location, 1)
+			if prev.year >= 1500 && prev.year <= 2015 &&
+                location.year >= 1500 && location.year <= 2015 &&
+                migrated(prev.place, location.place) {
+				migrations.add(prev, location)
 				//fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
 			}
 			prev = location
@@ -196,9 +234,9 @@ func readPersons(filename string) *fs_data.FamilySearchPersons {
 
 func processFiles(fileNames chan string, results chan Migrations) {
 	for fileName := range fileNames {
-		fmt.Printf("Processing file: %s", fileName)
+		//fmt.Printf("Processing file: %s", fileName)
 		m := processFile(fileName)
-		fmt.Printf("; found %d migration starts", len(m))
+		//fmt.Printf("; found %d immigration and %d emigration starts", len(m.immigrations), len(m.emigrations))
 		results <- m
 	}
 }
@@ -224,8 +262,31 @@ func getFilenames(filename string) (int, chan string) {
 	return numFiles, fileNames
 }
 
+func writeMigrations(migrations map[Location]map[Location]int, label, filename string) {
+    out, err := os.Create(filename)
+   	check(err)
+   	defer out.Close()
+   	buf := bufio.NewWriter(out)
+   	// Get all the locations and sort them, the write migrations
+   	locs := NewLocations()
+   	for l, _ := range migrations {
+   		locs = append(locs, l)
+   	}
+   	sort.Sort(locs)
+   	for _, loc := range locs {
+   		buf.WriteString(fmt.Sprintf(label, loc))
+   		for l, c := range migrations[loc] {
+   			buf.WriteString(fmt.Sprintf(" %v (%d)", l, c))
+   		}
+   		buf.WriteString("\n")
+   	}
+   	buf.Flush()
+   	out.Sync()
+}
+
 var inFilename = flag.String("i", "", "input filename or directory")
-var outFilename = flag.String("o", "", "output filename")
+var immigrationFilename = flag.String("im", "", "output filename for immigrations")
+var emigrationFilename = flag.String("em", "", "output filename for emigrations")
 var numWorkers = flag.Int("w", 1, "number of workers)")
 
 func main() {
@@ -237,7 +298,7 @@ func main() {
 
 	numFiles, fileNames := getFilenames(*inFilename)
 
-	fmt.Println("Processing files")
+	fmt.Print("Processing files")
 	results := make(chan Migrations)
 
 	for i := 0; i < *numWorkers; i++ {
@@ -245,34 +306,29 @@ func main() {
 	}
 
 	// Merge all the resulting migration maps
-	migrations := make(Migrations)
+    migrations := Migrations {
+        immigrations: make(MigrationMap),
+        emigrations: make(MigrationMap),
+    }
 	for i := 0; i < numFiles; i++ {
 		m := <-results
-		for from, toMap := range m {
-			for to, count := range toMap {
-				migrations.add(from, to, count)
-			}
-		}
+        for from, toMap := range m.emigrations {
+            for to, count := range toMap {
+                migrations.emigrations.add(from, to, count)
+            }
+        }
+        for to, fromMap := range m.immigrations {
+            for from, count := range fromMap {
+                migrations.immigrations.add(to, from, count)
+            }
+        }
+        // monitor how many files have been processed
+        if i % 100 == 0 {
+            fmt.Print(".")
+        }
 	}
-	fmt.Println("\n\nTotal:", len(migrations))
-	
-	out, err := os.Create(*outFilename)
-	check(err)
-	defer out.Close()
-	buf := bufio.NewWriter(out)
-	// Get all the "from" locations and sort them, the write migrations
-	locs := NewLocations()
-	for l, _ := range migrations {
-		locs = append(locs, l)
-	}
-	sort.Sort(locs)
-	for _, loc := range locs {
-		buf.WriteString(fmt.Sprintf("From: %v To:", loc))
-		for l, c := range migrations[loc] {
-			buf.WriteString(fmt.Sprintf(" %v (%d)", l, c))
-		}
-		buf.WriteString("\n")
-	}
-	buf.Flush()
-	out.Sync()
+	fmt.Printf("\n\nTotal immigrations: %d emigrations %d\n", len(migrations.immigrations), len(migrations.emigrations))
+
+    writeMigrations(migrations.immigrations, "To: %v From:", *immigrationFilename)
+    writeMigrations(migrations.emigrations, "From: %v To:", *emigrationFilename)
 }
