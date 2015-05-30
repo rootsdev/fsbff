@@ -51,14 +51,13 @@ func TestMigrated(t *testing.T) {
 func TestMigrationMapAdd(t *testing.T) {
     var migrations = []struct {
         key Location
-        value Location
+        value string
         count int
     }{
-        {Location{"p1", 1}, Location{"p2", 1}, 10},
-        {Location{"p1", 1}, Location{"p2", 1}, 20},
-        {Location{"p1", 1}, Location{"p2", 2}, 30},
-        {Location{"p1", 1}, Location{"p3", 1}, 40},
-        {Location{"p2", 1}, Location{"p1", 1}, 50},
+        {Location{"p1", 1}, "p2", 10},
+        {Location{"p1", 1}, "p2", 20},
+        {Location{"p1", 1}, "p3", 40},
+        {Location{"p2", 1}, "p1", 50},
     }
     mmap := make(MigrationMap)
     for _, m := range migrations {
@@ -66,11 +65,11 @@ func TestMigrationMapAdd(t *testing.T) {
     }
     var tests = []struct {
         key Location
-        value Location
+        value string
         count int
     }{
-        {Location{"p1", 1}, Location{"p2", 1}, 30},
-        {Location{"p1", 1}, Location{"p2", 2}, 30},
+        {Location{"p1", 1}, "p2", 30},
+        {Location{"p1", 1}, "p3", 40},
     }
     for _, test := range tests {
         sum := mmap[test.key][test.value]
@@ -115,24 +114,48 @@ func TestMigrationAdd(t *testing.T) {
         from Location
         to Location
     }{
-        {Location{"Provo, Utah, Utah, United States", 1840}, Location{"Salt Lake, Utah, United States", 1851}},
-        {Location{"Orem, Utah, Utah, United States", 1841}, Location{"Salt Lake, Utah, United States", 1852}},
-        {Location{"Nephi, Juab, Utah, United States", 1840}, Location{"Ramsey, Minnesota, United States", 1851}},
-        {Location{"Salt Lake, Utah, United States", 1842}, Location{"Minnesota, United States", 1853}},
+        {Location{"Provo, Utah, Utah, United States", 1840}, Location{"Salt Lake, Utah, United States", 1850}},
+        {Location{"Orem, Utah, Utah, United States", 1841}, Location{"Salt Lake, Utah, United States", 1850}},
+        {Location{"Nephi, Juab, Utah, United States", 1840}, Location{"Ramsey, Minnesota, United States", 1850}},
+        {Location{"Salt Lake, Utah, United States", 1842}, Location{"Minnesota, United States", 1850}},
     }
-    var tests = []struct {
+    var emigrationTests = []struct {
         from Location
-        to Location
+        to string
         count int
     }{
-        {Location{"Utah, Utah, United States", 1840}, Location{"Salt Lake, Utah, United States", 1850}, 2},
-        {Location{"Juab, Utah, United States", 1840}, Location{"Ramsey, Minnesota, United States", 1850}, 1},
-        {Location{"Juab, Utah, United States", 1840}, Location{"Minnesota, United States", 1850}, 1},
-        {Location{"Salt Lake, Utah, United States", 1840}, Location{"Minnesota, United States", 1850}, 1},
-        {Location{"Utah, United States", 1840}, Location{"Ramsey, Minnesota, United States", 1850}, 1},
-        {Location{"Utah, United States", 1840}, Location{"Minnesota, United States", 1850}, 2},
+        {Location{"Utah, Utah, United States", 1840}, "Salt Lake, Utah, United States", 2},
+        {Location{"Juab, Utah, United States", 1840}, "Ramsey, Minnesota, United States", 1},
+        {Location{"Juab, Utah, United States", 1840}, "Minnesota, United States", 1},
+        {Location{"Salt Lake, Utah, United States", 1840}, "Minnesota, United States", 1},
+        {Location{"Utah, United States", 1840}, "Ramsey, Minnesota, United States", 1},
+        {Location{"Utah, United States", 1840}, "Minnesota, United States", 2},
+        {Location{"Utah, Utah, United States", 1840}, "TOTAL", 2},
+        {Location{"Juab, Utah, United States", 1840}, "TOTAL", 1},
+        {Location{"Salt Lake, Utah, United States", 1840}, "TOTAL", 1},
+        {Location{"Utah, United States", 1840}, "TOTAL", 4},
+        {Location{"United States", 1840}, "TOTAL", 4},
     }
-    total := 8
+    totalEmigrations := 20
+
+    var immigrationTests = []struct {
+        to Location
+        from string
+        count int
+    }{
+        {Location{"Salt Lake, Utah, United States", 1850}, "Utah, Utah, United States", 2},
+        {Location{"Ramsey, Minnesota, United States", 1850}, "Juab, Utah, United States", 1},
+        {Location{"Minnesota, United States", 1850}, "Juab, Utah, United States", 1},
+        {Location{"Minnesota, United States", 1850}, "Salt Lake, Utah, United States", 1},
+        {Location{"Ramsey, Minnesota, United States", 1850}, "Utah, United States", 1},
+        {Location{"Minnesota, United States", 1850}, "Utah, United States", 2},
+        {Location{"Salt Lake, Utah, United States", 1850}, "TOTAL", 2},
+        {Location{"Utah, United States", 1850}, "TOTAL", 2},
+        {Location{"Ramsey, Minnesota, United States", 1850}, "TOTAL", 1},
+        {Location{"Minnesota, United States", 1850}, "TOTAL", 2},
+        {Location{"United States", 1850}, "TOTAL", 4},
+    }
+    totalImmigrations := 19
 
     m := Migrations {
         immigrations: make(MigrationMap),
@@ -142,16 +165,18 @@ func TestMigrationAdd(t *testing.T) {
         m.add(migration.from, migration.to)
     }
 
-    for _, test := range tests {
+    for _, test := range emigrationTests {
         sum := m.emigrations[test.from][test.to]
         if sum != test.count {
-            t.Errorf("TestMigrationAdd emigrations %s %d -> %s %d got %d; want %d",
-                test.from.place, test.from.year, test.to.place, test.to.year, sum, test.count)
+            t.Errorf("TestMigrationAdd emigrations %s %d -> %s got %d; want %d",
+               test.from.place, test.from.year, test.to, sum, test.count)
         }
-        sum = m.immigrations[test.to][test.from]
+    }
+    for _, test := range immigrationTests {
+        sum := m.immigrations[test.to][test.from]
         if sum != test.count {
-            t.Errorf("TestMigrationAdd immigrations %s %d <- %s %d got %d; want %d",
-                test.to.place, test.to.year, test.from.place, test.from.year, sum, test.count)
+            t.Errorf("TestMigrationAdd immigrations %s %d <- %s got %d; want %d",
+                test.to.place, test.to.year, test.from, sum, test.count)
         }
     }
 
@@ -161,8 +186,8 @@ func TestMigrationAdd(t *testing.T) {
             cnt += c
         }
     }
-    if cnt != total {
-        t.Errorf("TestMigrationAdd total emigrations got %d; want %d", cnt, total)
+    if cnt != totalEmigrations {
+        t.Errorf("TestMigrationAdd total emigrations got %d; want %d", cnt, totalEmigrations)
     }
 
     cnt = 0
@@ -171,8 +196,7 @@ func TestMigrationAdd(t *testing.T) {
             cnt += c
         }
     }
-    if cnt != total {
-        t.Errorf("TestMigrationAdd total immigrations got %d; want %d", cnt, total)
+    if cnt != totalImmigrations {
+        t.Errorf("TestMigrationAdd total immigrations got %d; want %d", cnt, totalImmigrations)
     }
-
 }

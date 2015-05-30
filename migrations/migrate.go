@@ -18,6 +18,7 @@ import (
 )
 
 const YEAR_GRANULARITY = 10
+const TOTAL = "TOTAL"
 
 type Location struct {
 	place string
@@ -33,21 +34,21 @@ func (l Locations) Len() int {
     return len(l)
 }
 func (l Locations) Less(i, j int) bool {
-    if l[i].year == l[j].year {
-    	return l[i].place < l[j].place
+    if l[i].place == l[j].place {
+    	return l[i].year < l[j].year
     }
-	return l[i].year < l[j].year
+	return l[i].place < l[j].place
 }
 func (l Locations) Swap(i, j int) {
     l[i], l[j] = l[j], l[i]
 }
 
-type MigrationMap map[Location]map[Location]int
+type MigrationMap map[Location]map[string]int
 
-func (mmap MigrationMap) add(key, value Location, count int) {
+func (mmap MigrationMap) add(key Location, value string, count int) {
     locations := mmap[key]
    	if locations == nil {
-   		locations = make(map[Location]int)
+   		locations = make(map[string]int)
    		mmap[key] = locations
    	}
     locations[value] = locations[value] + count
@@ -55,6 +56,7 @@ func (mmap MigrationMap) add(key, value Location, count int) {
 
 // Maps "from" locations to "to" locations and vice-versa
 type Migrations struct {
+    singletons int
     immigrations MigrationMap  // map "to" Location to multiple "from" Locations with count each one occurred
     emigrations MigrationMap // map "from" Location to multiple "to" Locations with count each one occurred
 }
@@ -68,12 +70,14 @@ func (m Migrations) add(from, to Location) {
 
     // for each combination of levels: (from county, from state, from county) X (to county, to state, to country)
     for fromLevel := 0; fromLevel < len(stdFromLevels); fromLevel++ {
+        // calculate the from location for this level
+        stdFrom := Location{
+            place: strings.Join(stdFromLevels[fromLevel:], ", "),
+            year: stdFromYear,
+        }
+
         for toLevel := 0; toLevel < len(stdToLevels); toLevel++ {
-            // calculate the from and to locations for this level combination
-            stdFrom := Location{
-                place: strings.Join(stdFromLevels[fromLevel:], ", "),
-                year: stdFromYear,
-            }
+            // calculate the to location for this level
             stdTo := Location{
                 place: strings.Join(stdToLevels[toLevel:], ", "),
                 year: stdToYear,
@@ -84,12 +88,20 @@ func (m Migrations) add(from, to Location) {
                 !(len(stdFromLevels) - fromLevel > len(stdToLevels) - toLevel && strings.HasSuffix(stdFrom.place, stdTo.place)) &&
                 !(len(stdFromLevels) - fromLevel < len(stdToLevels) - toLevel && strings.HasSuffix(stdTo.place, stdFrom.place)) {
                 // add 1 to emigrations
-                m.emigrations.add(stdFrom, stdTo, 1)
+                m.emigrations.add(stdFrom, stdTo.place, 1)
 
                 // add 1 to immigrations
-                m.immigrations.add(stdTo, stdFrom, 1)
+                m.immigrations.add(stdTo, stdFrom.place, 1)
+            }
+
+            // add 1 to immigrations total
+            if fromLevel == 0 {
+                m.immigrations.add(stdTo, TOTAL, 1)
             }
         }
+
+        // add 1 to emigrations total
+        m.emigrations.add(stdFrom, TOTAL, 1)
     }
 }
 
@@ -135,6 +147,7 @@ func processFile(filename string) Migrations {
 			}
 		}
 		if len(locations) <= 1 {
+            migrations.singletons++
 			continue
 		}
 		sort.Sort(locations)
@@ -145,8 +158,9 @@ func processFile(filename string) Migrations {
 		prev := Location{}
 		for _, location := range locations {
 			if prev.year >= 1500 && prev.year <= 2015 &&
-                location.year >= 1500 && location.year <= 2015 &&
-                migrated(prev.place, location.place) {
+                location.year >= 1500 && location.year <= 2015 {
+                // move the migration test into the add function so we can calculate "total"'s
+                //migrated(prev.place, location.place) {
 				migrations.add(prev, location)
 				//fmt.Printf("Migrated from: %v to %v (%d migrations)\n", prev, location, migrations[prev][location])
 			}
@@ -262,7 +276,7 @@ func getFilenames(filename string) (int, chan string) {
 	return numFiles, fileNames
 }
 
-func writeMigrations(migrations map[Location]map[Location]int, label, filename string) {
+func writeMigrations(migrations map[Location]map[string]int, label, filename string) {
     out, err := os.Create(filename)
    	check(err)
    	defer out.Close()
@@ -276,12 +290,20 @@ func writeMigrations(migrations map[Location]map[Location]int, label, filename s
    	for _, loc := range locs {
    		buf.WriteString(fmt.Sprintf(label, loc))
    		for l, c := range migrations[loc] {
-   			buf.WriteString(fmt.Sprintf(" %v (%d)", l, c))
+   			buf.WriteString(fmt.Sprintf(" %s (%d);", l, c))
    		}
    		buf.WriteString("\n")
    	}
    	buf.Flush()
    	out.Sync()
+}
+
+func countTotals(m MigrationMap) int {
+    var total int
+    for _, toMap := range m {
+        total += toMap[TOTAL]
+    }
+    return total
 }
 
 var inFilename = flag.String("i", "", "input filename or directory")
@@ -307,11 +329,13 @@ func main() {
 
 	// Merge all the resulting migration maps
     migrations := Migrations {
+        singletons: 0,
         immigrations: make(MigrationMap),
         emigrations: make(MigrationMap),
     }
 	for i := 0; i < numFiles; i++ {
 		m := <-results
+        migrations.singletons += m.singletons
         for from, toMap := range m.emigrations {
             for to, count := range toMap {
                 migrations.emigrations.add(from, to, count)
@@ -327,7 +351,9 @@ func main() {
             fmt.Print(".")
         }
 	}
-	fmt.Printf("\n\nTotal immigrations: %d emigrations %d\n", len(migrations.immigrations), len(migrations.emigrations))
+    totalImmigrations := countTotals(migrations.immigrations)
+    totalEmigrations := countTotals(migrations.emigrations)
+	fmt.Printf("\n\nTotal singletons: %d immigrations: %d emigrations %d\n", migrations.singletons, totalImmigrations, totalEmigrations)
 
     writeMigrations(migrations.immigrations, "To: %v From:", *immigrationFilename)
     writeMigrations(migrations.emigrations, "From: %v To:", *emigrationFilename)
